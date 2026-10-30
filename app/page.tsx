@@ -20,10 +20,10 @@ const EMAIL = "deepikagowdabt@gmail.com";
 export default function Home() {
   return (
     <main className="min-h-screen p-8">
-      <section className="grid grid-cols-1 items-center gap-12 md:grid-cols-2">
+      <section className="grid grid-cols-1 items-start gap-12 md:grid-cols-2">
         <BloomField />
 
-        <div>
+        <div className="md:pt-[28px]">
           <h2 className="font-display mb-12 text-5xl text-blossom md:text-6xl">About</h2>
           <ul className="max-w-[34rem] space-y-10">
             {about.map((item) => (
