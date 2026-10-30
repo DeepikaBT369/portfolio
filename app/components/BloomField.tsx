@@ -4,8 +4,8 @@ import { useEffect, useRef } from "react";
 
 type Sprite = { img: HTMLImageElement | HTMLCanvasElement; sx: number; sy: number; sw: number; sh: number };
 
-// Color of the buds the portrait settles into. Change this one line to try another green.
-const BUD_COLOR = "#00A86B";
+// Where one sprite lives inside the atlas, plus its proportions (the longer side is 1).
+type Cell = { sx: number; sy: number; sw: number; sh: number; w: number; h: number };
 
 type Flower = {
     x: number; // where it settles (its place in the portrait)
@@ -20,14 +20,27 @@ type Flower = {
     delay: number; // stagger so the flowers don't all move at once (ms)
 };
 
+// Color of the buds the portrait settles into. Change this one line to try another green.
+const BUD_COLOR = "#00A86B";
+
 // Load animation timeline (ms): flowers fade in scattered, drift into the portrait, then close into buds.
 const FADE_IN = 700;
 const TRAVEL_START = 400;
 const TRAVEL_TIME = 1800;
 const BUD_START = 2000;
-const BUD_TIME = 1200;
-const STAGGER = 700;
+const BUD_TIME = 1600;
+const STAGGER = 800;
 const INTRO_END = BUD_START + BUD_TIME + STAGGER;
+
+// Hover: how quickly flowers open and close (per millisecond, so it feels the same at any frame rate).
+const OPEN_RATE = 0.0097;
+const CLOSE_RATE = 0.00245;
+
+// Atlas: the three flower images shrunk onto one small canvas. Drawing from a single small image
+// is much faster than drawing from three big ones, which is what keeps ~10,000 flowers smooth.
+const CELL = 64;
+const PAD = 2;
+const STRIDE = CELL + PAD * 2;
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -37,7 +50,7 @@ const trim = (img: HTMLImageElement): Sprite => {
     const c = document.createElement("canvas");
     c.width = img.width;
     c.height = img.height;
-    const cx = c.getContext("2d");
+    const cx = c.getContext("2d", { willReadFrequently: true });
     if (!cx) return { img, sx: 0, sy: 0, sw: img.width, sh: img.height };
     cx.drawImage(img, 0, 0);
     const d = cx.getImageData(0, 0, c.width, c.height).data;
@@ -88,6 +101,26 @@ const recolor = (sp: Sprite, hex: string): Sprite => {
     return { img: c, sx: 0, sy: 0, sw: sp.sw, sh: sp.sh };
 };
 
+const buildAtlas = (sprites: Sprite[]): { atlas: HTMLCanvasElement; cells: Cell[] } | null => {
+    const atlas = document.createElement("canvas");
+    atlas.width = STRIDE * sprites.length;
+    atlas.height = STRIDE;
+    const cx = atlas.getContext("2d");
+    if (!cx) return null;
+    cx.imageSmoothingQuality = "high";
+    const cells = sprites.map((sp, i) => {
+        const m = Math.max(sp.sw, sp.sh);
+        const w = sp.sw / m;
+        const h = sp.sh / m;
+        const dw = Math.max(1, Math.round(w * CELL));
+        const dh = Math.max(1, Math.round(h * CELL));
+        const ox = i * STRIDE + PAD;
+        cx.drawImage(sp.img, sp.sx, sp.sy, sp.sw, sp.sh, ox, PAD, dw, dh);
+        return { sx: ox, sy: PAD, sw: dw, sh: dh, w, h };
+    });
+    return { atlas, cells };
+};
+
 export default function BloomField() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -115,15 +148,18 @@ export default function BloomField() {
         bloom.src = "/bloom.png";
         potrait.src = "/potrait.png";
 
-        let budSprite: Sprite;
-        let halfSprite: Sprite;
-        let bloomSprite: Sprite;
-
         // Everything scales with the canvas height, so a smaller portrait keeps the same level of detail.
         const k = H / 700;
         const size = 5.5 * k;
         const gap = 6 * k;
+        const hoverRadius = 100 * k;
         const flowers: Flower[] = [];
+
+        let atlas: HTMLCanvasElement;
+        let budCell: Cell;
+        let halfCell: Cell;
+        let bloomCell: Cell;
+        let base: HTMLCanvasElement | null = null; // every flower, settled as a bud, drawn once
 
         const buildFlowers = () => {
             const off = document.createElement("canvas");
@@ -180,76 +216,205 @@ export default function BloomField() {
         let mouseY = -1000;
         let frameId = 0;
         let startTime = 0;
+        let lastTime = 0;
+        let lastHadActive = false;
         let cancelled = false;
 
         const handleMove = (e: MouseEvent) => {
-            const rect = canvas.getBoundingClientRect();
-            mouseX = e.clientX - rect.left;
-            mouseY = e.clientY - rect.top;
+            // offsetX/Y are already relative to the canvas, so no layout measuring on every mouse event.
+            mouseX = e.offsetX;
+            mouseY = e.offsetY;
         };
         const handleLeave = () => {
             mouseX = -1000;
             mouseY = -1000;
         };
 
-        const drawSprite = (sp: Sprite, x: number, y: number, size: number, cos: number, sin: number) => {
-            const m = Math.max(sp.sw, sp.sh);
-            const dw = (sp.sw / m) * size;
-            const dh = (sp.sh / m) * size;
-            ctx.setTransform(dpr * cos, dpr * sin, -dpr * sin, dpr * cos, dpr * x, dpr * y);
-            ctx.drawImage(sp.img, sp.sx, sp.sy, sp.sw, sp.sh, -dw / 2, -dh / 2, dw, dh);
+        // Draw one sprite from the atlas.
+        const put = (c: CanvasRenderingContext2D, cell: Cell, f: Flower, x: number, y: number, size: number, alpha: number) => {
+            if (alpha <= 0.004) return;
+            c.globalAlpha = alpha;
+            c.setTransform(dpr * f.cos, dpr * f.sin, -dpr * f.sin, dpr * f.cos, dpr * x, dpr * y);
+            const dw = cell.w * size;
+            const dh = cell.h * size;
+            c.drawImage(atlas, cell.sx, cell.sy, cell.sw, cell.sh, -dw / 2, -dh / 2, dw, dh);
+        };
+
+        // Draw a flower at any point between bud (open = 0), half open (0.5) and full bloom (1).
+        // The next stage fades in over the current one, so there is never a sudden swap.
+        const drawFlower = (c: CanvasRenderingContext2D, f: Flower, x: number, y: number, size: number, open: number, alpha: number) => {
+            const stage = open * 2;
+            if (stage < 0.02) {
+                put(c, budCell, f, x, y, size, alpha);
+            } else if (stage < 1) {
+                put(c, budCell, f, x, y, size, alpha * clamp01((1 - stage) / 0.15));
+                put(c, halfCell, f, x, y, size, alpha * stage);
+            } else if (stage < 1.98) {
+                put(c, halfCell, f, x, y, size, alpha * clamp01((2 - stage) / 0.15));
+                put(c, bloomCell, f, x, y, size, alpha * (stage - 1));
+            } else {
+                put(c, bloomCell, f, x, y, size, alpha);
+            }
+        };
+
+        // Flowers near the cursor open; they close again slowly once it moves away.
+        const updateHover = (dt: number): Flower[] => {
+            const r2 = hoverRadius * hoverRadius;
+            const up = 1 - Math.exp(-dt * OPEN_RATE);
+            const down = 1 - Math.exp(-dt * CLOSE_RATE);
+            const active: Flower[] = [];
+            for (const f of flowers) {
+                let target = 0;
+                if (mouseX >= 0) {
+                    const dx = f.x - mouseX;
+                    const dy = f.y - mouseY;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < r2) target = 1 - Math.sqrt(d2) / hoverRadius;
+                }
+                if (target === 0 && f.b < 0.002) {
+                    f.b = 0;
+                    continue;
+                }
+                f.b += (target - f.b) * (target > f.b ? up : down);
+                if (f.b > 0.02) active.push(f);
+            }
+            return active;
+        };
+
+        const clear = () => {
+            ctx.globalCompositeOperation = "source-over";
+            ctx.globalAlpha = 1;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        };
+
+        // While the page loads, every flower moves, so every flower is drawn each frame.
+        const drawIntro = (t: number, dt: number) => {
+            updateHover(dt);
+            clear();
+            const fade = easeInOut(clamp01(t / FADE_IN));
+            for (const f of flowers) {
+                const travel = easeInOut(clamp01((t - TRAVEL_START - f.delay) / TRAVEL_TIME));
+                const x = f.sx + (f.x - f.sx) * travel;
+                const y = f.sy + (f.y - f.sy) * travel;
+                const intro = 1 - easeInOut(clamp01((t - BUD_START - f.delay) / BUD_TIME)); // 1 = open flower, 0 = bud
+                const open = Math.max(f.b, intro);
+                const alpha = (f.o + (1 - f.o) * intro * 0.5) * fade;
+                // While scattered, flowers are drawn a little larger so they read as flowers, not specks.
+                drawFlower(ctx, f, x, y, f.s * (1 + f.b) + intro * 3, open, alpha);
+            }
+            ctx.globalAlpha = 1;
+        };
+
+        // Once settled, the portrait is one saved picture. Only flowers the cursor is touching are redrawn on top.
+        const buildBase = () => {
+            const c = document.createElement("canvas");
+            c.width = canvas.width;
+            c.height = canvas.height;
+            const cx = c.getContext("2d");
+            if (!cx) return null;
+            for (const f of flowers) put(cx, budCell, f, f.x, f.y, f.s, f.o);
+            return c;
+        };
+
+        // The settled picture is put back one small tile at a time, and only where open flowers were or are.
+        const TILE = 48; // CSS px
+        const tilesX = Math.ceil(W / TILE);
+        const tilesY = Math.ceil(H / TILE);
+        const stamp = new Int32Array(tilesX * tilesY); // last frame each tile was touched, to avoid doing one twice
+        let frameNo = 0;
+        let prevTiles: number[] = []; // tiles that had open flowers in the previous frame
+
+        const restore = (tile: number) => {
+            const tx = tile % tilesX;
+            const ty = Math.floor(tile / tilesX);
+            const x0 = Math.round(tx * TILE * dpr);
+            const y0 = Math.round(ty * TILE * dpr);
+            const w = Math.min(canvas.width, Math.round((tx + 1) * TILE * dpr)) - x0;
+            const h = Math.min(canvas.height, Math.round((ty + 1) * TILE * dpr)) - y0;
+            ctx.clearRect(x0, y0, w, h);
+            if (base) ctx.drawImage(base, x0, y0, w, h, x0, y0, w, h);
+        };
+
+        const drawSettled = (dt: number, full: boolean) => {
+            const active = updateHover(dt);
+            frameNo++;
+            ctx.globalCompositeOperation = "source-over";
+            ctx.globalAlpha = 1;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            if (full) ctx.clearRect(0, 0, canvas.width, canvas.height); // otherwise only touched tiles are redrawn
+
+            // Which tiles do the open flowers touch? (A bloom can spill a little past its own tile.)
+            const cur: number[] = [];
+            for (const f of active) {
+                const m = f.s * 1.5 + 2;
+                const tx0 = Math.max(0, Math.floor((f.x - m) / TILE));
+                const tx1 = Math.min(tilesX - 1, Math.floor((f.x + m) / TILE));
+                const ty0 = Math.max(0, Math.floor((f.y - m) / TILE));
+                const ty1 = Math.min(tilesY - 1, Math.floor((f.y + m) / TILE));
+                for (let ty = ty0; ty <= ty1; ty++) {
+                    for (let tx = tx0; tx <= tx1; tx++) {
+                        const i = ty * tilesX + tx;
+                        if (stamp[i] !== frameNo) {
+                            stamp[i] = frameNo;
+                            cur.push(i);
+                        }
+                    }
+                }
+            }
+
+            if (full) {
+                if (base) ctx.drawImage(base, 0, 0);
+            } else {
+                for (const i of cur) restore(i);
+                for (const i of prevTiles) if (stamp[i] !== frameNo) restore(i);
+            }
+
+            // Open flowers fade in over the resting bud, which the half-open flower covers.
+            for (const f of active) {
+                const stage = f.b * 2;
+                const size = f.s * (1 + f.b);
+                if (stage < 1) {
+                    put(ctx, halfCell, f, f.x, f.y, size, f.o * stage);
+                } else {
+                    put(ctx, halfCell, f, f.x, f.y, size, f.o * clamp01((2 - stage) / 0.15));
+                    put(ctx, bloomCell, f, f.x, f.y, size, f.o * (stage - 1));
+                }
+            }
+            ctx.globalAlpha = 1;
+            prevTiles = cur;
+            lastHadActive = active.length > 0;
         };
 
         const loop = (now: number) => {
             frameId = requestAnimationFrame(loop);
+            const dt = Math.min(50, now - (lastTime || now));
+            lastTime = now;
             const t = reduceMotion ? INTRO_END : now - startTime;
-            const introDone = t >= INTRO_END;
 
-            // Once everything has settled and nobody is hovering, there is nothing to redraw.
-            if (introDone && mouseX < 0 && !flowers.some((f) => f.b > 0.002)) return;
-
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            const fade = introDone ? 1 : easeInOut(clamp01(t / FADE_IN));
-
-            for (const f of flowers) {
-                // Hover: flowers near the cursor open, then close again slowly.
-                const dist = Math.hypot(f.x - mouseX, f.y - mouseY);
-                const target = Math.max(0, 1 - dist / (100 * k));
-                f.b += (target - f.b) * (target > f.b ? 0.15 : 0.04);
-
-                // Intro: 1 = fully open flower, 0 = bud.
-                let intro = 0;
-                let x = f.x;
-                let y = f.y;
-                if (!introDone) {
-                    const travel = easeInOut(clamp01((t - TRAVEL_START - f.delay) / TRAVEL_TIME));
-                    x = f.sx + (f.x - f.sx) * travel;
-                    y = f.sy + (f.y - f.sy) * travel;
-                    intro = 1 - easeInOut(clamp01((t - BUD_START - f.delay) / BUD_TIME));
-                }
-
-                const open = Math.max(f.b, intro);
-                ctx.globalAlpha = (f.o + (1 - f.o) * intro * 0.5) * fade;
-
-                let sprite = budSprite;
-                if (open > 0.6) sprite = bloomSprite;
-                else if (open > 0.25) sprite = halfSprite;
-
-                // While scattered, flowers are drawn a little larger so they read as flowers, not specks.
-                const s = f.s * (1 + f.b) + intro * 3;
-                drawSprite(sprite, x, y, s, f.cos, f.sin);
+            if (t < INTRO_END) {
+                drawIntro(t, dt);
+                return;
             }
-            ctx.globalAlpha = 1;
+            if (!base) {
+                base = buildBase();
+                drawSettled(dt, true);
+                return;
+            }
+            // Settled, nobody hovering, nothing still closing: there is nothing to redraw.
+            if (mouseX < 0 && !lastHadActive) return;
+            drawSettled(dt, false);
         };
 
         let loaded = 0;
         const onImageLoad = () => {
             loaded++;
             if (loaded === 4 && !cancelled) {
-                budSprite = recolor(trim(bud), BUD_COLOR);
-                halfSprite = trim(half);
-                bloomSprite = trim(bloom);
+                const sprites = [recolor(trim(bud), BUD_COLOR), trim(half), trim(bloom)];
+                const built = buildAtlas(sprites);
+                if (!built) return;
+                atlas = built.atlas;
+                [budCell, halfCell, bloomCell] = built.cells;
                 buildFlowers();
                 startTime = performance.now();
                 frameId = requestAnimationFrame(loop);
