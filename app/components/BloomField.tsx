@@ -2,7 +2,10 @@
 
 import { useEffect, useRef } from "react";
 
-type Sprite = { img: HTMLImageElement; sx: number; sy: number; sw: number; sh: number };
+type Sprite = { img: HTMLImageElement | HTMLCanvasElement; sx: number; sy: number; sw: number; sh: number };
+
+// Color of the buds the portrait settles into. Change this one line to try another green.
+const BUD_COLOR = "#00A86B";
 
 type Flower = {
     x: number; // where it settles (its place in the portrait)
@@ -53,6 +56,38 @@ const trim = (img: HTMLImageElement): Sprite => {
     return { img, sx: minX, sy: minY, sw: maxX - minX + 1, sh: maxY - minY + 1 };
 };
 
+// Repaint a sprite in another color while keeping its painted shading: each pixel's brightness
+// relative to the sprite's average is applied to the new color, so the average color becomes `hex`.
+const recolor = (sp: Sprite, hex: string): Sprite => {
+    const c = document.createElement("canvas");
+    c.width = sp.sw;
+    c.height = sp.sh;
+    const cx = c.getContext("2d", { willReadFrequently: true });
+    if (!cx) return sp;
+    cx.drawImage(sp.img, sp.sx, sp.sy, sp.sw, sp.sh, 0, 0, sp.sw, sp.sh);
+    const image = cx.getImageData(0, 0, c.width, c.height);
+    const d = image.data;
+    const target = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 20) continue;
+        sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        count++;
+    }
+    const avg = count ? sum / count : 1;
+    for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 20) continue;
+        const k = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / avg;
+        d[i] = Math.min(255, target[0] * k);
+        d[i + 1] = Math.min(255, target[1] * k);
+        d[i + 2] = Math.min(255, target[2] * k);
+    }
+    cx.putImageData(image, 0, 0);
+    return { img: c, sx: 0, sy: 0, sw: sp.sw, sh: sp.sh };
+};
+
 export default function BloomField() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -84,8 +119,10 @@ export default function BloomField() {
         let halfSprite: Sprite;
         let bloomSprite: Sprite;
 
-        const size = 5.5;
-        const gap = 6;
+        // Everything scales with the canvas height, so a smaller portrait keeps the same level of detail.
+        const k = H / 700;
+        const size = 5.5 * k;
+        const gap = 6 * k;
         const flowers: Flower[] = [];
 
         const buildFlowers = () => {
@@ -95,7 +132,8 @@ export default function BloomField() {
             const offCtx = off.getContext("2d", { willReadFrequently: true });
             if (!offCtx) return;
 
-            const fit = Math.min(W / potrait.width, H / potrait.height);
+            // 0.9 leaves a little breathing space around the portrait so the hair and shoulders don't touch the edge.
+            const fit = Math.min(W / potrait.width, H / potrait.height) * 0.9;
             const w = potrait.width * fit;
             const h = potrait.height * fit;
             offCtx.drawImage(potrait, (W - w) / 2, (H - h) / 2, w, h);
@@ -177,7 +215,7 @@ export default function BloomField() {
             for (const f of flowers) {
                 // Hover: flowers near the cursor open, then close again slowly.
                 const dist = Math.hypot(f.x - mouseX, f.y - mouseY);
-                const target = Math.max(0, 1 - dist / 100);
+                const target = Math.max(0, 1 - dist / (100 * k));
                 f.b += (target - f.b) * (target > f.b ? 0.15 : 0.04);
 
                 // Intro: 1 = fully open flower, 0 = bud.
@@ -209,7 +247,7 @@ export default function BloomField() {
         const onImageLoad = () => {
             loaded++;
             if (loaded === 4 && !cancelled) {
-                budSprite = trim(bud);
+                budSprite = recolor(trim(bud), BUD_COLOR);
                 halfSprite = trim(half);
                 bloomSprite = trim(bloom);
                 buildFlowers();
@@ -233,5 +271,5 @@ export default function BloomField() {
         };
     }, []);
 
-    return <canvas ref={canvasRef} className="w-full h-[420px] md:h-[700px]" />;
+    return <canvas ref={canvasRef} className="w-full h-[340px] md:h-[460px]" />;
 }

@@ -15,6 +15,8 @@ const about = [
   },
 ];
 
+const EMAIL = "deepikagowdabt@gmail.com";
+
 export default function Home() {
   return (
     <main className="min-h-screen p-8">
@@ -31,6 +33,26 @@ export default function Home() {
               </li>
             ))}
           </ul>
+
+          <a
+            href={`mailto:${EMAIL}`}
+            className="mt-12 inline-flex items-center gap-3 rounded-full border border-blossom px-5 py-3 text-blossom transition-colors hover:bg-blossom hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blossom"
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="m3 7 9 6 9-6" />
+            </svg>
+            {EMAIL}
+          </a>
         </div>
       </section>
     </main>

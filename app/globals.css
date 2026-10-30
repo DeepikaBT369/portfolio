@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
-/* The portrait is made of green buds on a dark ground, so the site is dark-only.
+/* The portrait is made of jade buds on a dark green ground, so the site is dark-only.
    Colors are sampled from the artwork in /public: bloom.png (pink) and bud.png (green). */
 :root {
   color-scheme: dark;
-  --background: #0e0b0c;
+  --background: #1a2421;
   --foreground: #f6ece9;
   --muted: #b9a9a9;
   --blossom: #f1a7ae;
-  --leaf: #09811a;
+  --leaf: #00a86b;
 }
 
 @theme inline {
