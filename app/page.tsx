@@ -22,12 +22,12 @@ export default function Home() {
         <BloomField />
 
         <div>
-          <h2 className="mb-8 text-3xl font-semibold">About</h2>
-          <ul className="space-y-6">
+          <h2 className="font-display mb-12 text-5xl text-blossom md:text-6xl">About</h2>
+          <ul className="max-w-[34rem] space-y-10">
             {about.map((item) => (
               <li key={item.title}>
-                <h3 className="text-lg font-semibold">{item.title}</h3>
-                <p className="mt-1 leading-relaxed opacity-80">{item.text}</p>
+                <h3 className="font-display text-2xl text-foreground">{item.title}</h3>
+                <p className="mt-2 text-lg leading-relaxed text-muted">{item.text}</p>
               </li>
             ))}
           </ul>
