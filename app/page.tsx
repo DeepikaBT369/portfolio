@@ -24,7 +24,7 @@ export default function Home() {
         <BloomField />
 
         <div className="md:pt-[28px]">
-          <h2 className="font-display mb-12 text-5xl text-blossom md:text-6xl">About</h2>
+          <h2 className="font-display mb-12 text-5xl text-blossom md:text-6xl">About Me</h2>
           <ul className="max-w-[34rem] space-y-10">
             {about.map((item) => (
               <li key={item.title}>
