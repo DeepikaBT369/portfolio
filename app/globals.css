@@ -1,26 +1,33 @@
 @import "tailwindcss";
 
+/* The portrait is made of green buds on a dark ground, so the site is dark-only.
+   Colors are sampled from the artwork in /public: bloom.png (pink) and bud.png (green). */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --background: #0e0b0c;
+  --foreground: #f6ece9;
+  --muted: #b9a9a9;
+  --blossom: #f1a7ae;
+  --leaf: #09811a;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-muted: var(--muted);
+  --color-blossom: var(--blossom);
+  --color-leaf: var(--leaf);
+  --font-sans: var(--font-hanken);
+  --font-display: var(--font-fraunces);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-hanken), system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--blossom);
+  color: var(--background);
 }
